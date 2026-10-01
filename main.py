@@ -1,33 +1,22 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import yt_dlp
 import os
 
-app = FastAPI(title="VideoDrop Microservice")
+app = Flask(__name__)
+CORS(app)
 
-# সব ধরনের রিকোয়েস্টের জন্য CORS উন্মুক্ত রাখা
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-class VideoRequest(BaseModel):
-    url: str
-
-class DownloadRequest(BaseModel):
-    url: str
-    formatId: str
-
-@app.get("/")
+@app.route('/', methods=['GET'])
 def home():
-    return {"status": "online", "message": "VideoDrop Backend Microservice is running!"}
+    return jsonify({"status": "online", "message": "VideoDrop Backend Microservice is running!"})
 
-@app.post("/analyze")
-def analyze(req: VideoRequest):
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    data = request.get_json() or {}
+    url = data.get('url')
+    if not url:
+        return jsonify({"error": "URL is required"}), 400
+
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -35,12 +24,11 @@ def analyze(req: VideoRequest):
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(req.url, download=False)
+            info = ydl.extract_info(url, download=False)
             
             formats = []
             seen_heights = set()
             
-            # ভিডিও কোয়ালিটি ফিল্টার (1080p, 720p, 480p, 360p)
             for f in info.get('formats', []):
                 height = f.get('height')
                 ext = f.get('ext', 'mp4')
@@ -60,23 +48,21 @@ def analyze(req: VideoRequest):
                         "downloadUrl": stream_url
                     })
             
-            # অডিও অপশন (MP3 / Audio)
             formats.append({
                 "id": "audio",
                 "quality": "Audio Only",
                 "format": "mp3",
                 "size": "Audio Stream",
                 "downloadAvailable": True,
-                "downloadUrl": info.get('url') or req.url
+                "downloadUrl": info.get('url') or url
             })
 
-            # সময় ফরম্যাট করা (MM:SS)
             duration_sec = info.get('duration', 0)
             mins = int(duration_sec // 60)
             secs = int(duration_sec % 60)
             duration_str = f"{mins:02d}:{secs:02d}" if duration_sec else None
 
-            return {
+            return jsonify({
                 "success": True,
                 "title": info.get('title', 'Video'),
                 "thumbnail": info.get('thumbnail', ''),
@@ -87,30 +73,31 @@ def analyze(req: VideoRequest):
                 },
                 "downloadConfigured": True,
                 "formats": formats
-            }
+            })
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return jsonify({"error": str(e)}), 400
 
-@app.post("/download")
-def download(req: DownloadRequest):
+@app.route('/download', methods=['POST'])
+def download():
+    data = request.get_json() or {}
+    url = data.get('url')
+    format_id = data.get('formatId', '')
     try:
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(req.url, download=False)
-            
-            # ইউজার যে কোয়ালিটি চেয়েছেন তার লিঙ্ক বের করা
+            info = ydl.extract_info(url, download=False)
             for f in info.get('formats', []):
-                if req.formatId.replace('p', '') == str(f.get('height')) and f.get('url'):
-                    return {
+                if format_id.replace('p', '') == str(f.get('height')) and f.get('url'):
+                    return jsonify({
                         "downloadUrl": f.get('url'),
                         "filename": f"{info.get('title', 'video')}.mp4"
-                    }
-            return {
+                    })
+            return jsonify({
                 "downloadUrl": info.get('url'),
                 "filename": f"{info.get('title', 'video')}.mp4"
-            }
+            })
     except Exception as e:
-        return {"error": str(e)}
+        return jsonify({"error": str(e)}), 400
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port)
