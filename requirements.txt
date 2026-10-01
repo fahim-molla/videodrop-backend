@@ -2,3 +2,7 @@ fastapi==0.110.0
 uvicorn==0.28.0
 yt-dlp
 pydantic==2.6.4
+flask
+flask-cors
+gunicorn
+yt-dlp
