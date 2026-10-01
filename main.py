@@ -4,11 +4,15 @@ import yt_dlp
 import os
 
 app = Flask(__name__)
+# যেকোনো জায়গা থেকে রিকোয়েস্ট আসার অনুমতি (CORS)
 CORS(app)
 
 @app.route('/', methods=['GET'])
 def home():
-    return jsonify({"status": "online", "message": "VideoDrop Backend Microservice is running!"})
+    return jsonify({
+        "status": "online",
+        "message": "VideoDrop Backend Microservice is running perfectly!"
+    })
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -17,11 +21,22 @@ def analyze():
     if not url:
         return jsonify({"error": "URL is required"}), 400
 
+    # YouTube এবং অন্যান্য সাইটের বট-ব্লক বাইপাস করার কনফিগারেশন
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
     }
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -29,6 +44,7 @@ def analyze():
             formats = []
             seen_heights = set()
             
+            # ভিডিও কোয়ালিটি ফিল্টার করা (1080p, 720p, 480p, 360p)
             for f in info.get('formats', []):
                 height = f.get('height')
                 ext = f.get('ext', 'mp4')
@@ -48,6 +64,7 @@ def analyze():
                         "downloadUrl": stream_url
                     })
             
+            # অডিও অপশন (MP3 / Audio)
             formats.append({
                 "id": "audio",
                 "quality": "Audio Only",
@@ -57,6 +74,7 @@ def analyze():
                 "downloadUrl": info.get('url') or url
             })
 
+            # ভিডিওর মোট সময় ফরম্যাট করা (MM:SS)
             duration_sec = info.get('duration', 0)
             mins = int(duration_sec // 60)
             secs = int(duration_sec % 60)
@@ -82,15 +100,28 @@ def download():
     data = request.get_json() or {}
     url = data.get('url')
     format_id = data.get('formatId', '')
+    
+    ydl_opts = {
+        'quiet': True,
+        'skip_download': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
+        }
+    }
+    
     try:
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            
             for f in info.get('formats', []):
                 if format_id.replace('p', '') == str(f.get('height')) and f.get('url'):
                     return jsonify({
                         "downloadUrl": f.get('url'),
                         "filename": f"{info.get('title', 'video')}.mp4"
                     })
+            
             return jsonify({
                 "downloadUrl": info.get('url'),
                 "filename": f"{info.get('title', 'video')}.mp4"
