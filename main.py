@@ -2,33 +2,45 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import yt_dlp
 import os
+import time
 
 app = Flask(__name__)
 CORS(app)
 
-def get_ydl_options():
-    # অ্যান্ড্রয়েড ক্লায়েন্ট ব্যবহার করা হচ্ছে যা কোনো কুকিজ ছাড়াই শতভাগ আসল ভিডিও স্ট্রিম দেয়
-    return {
+# ফাস্ট ক্যাশিং ডিকশনারি (যাতে একই লিংকে বারবার সময় নষ্ট না হয়)
+URL_CACHE = {}
+CACHE_TTL = 300 # ৫ মিনিট ক্যাশ থাকবে
+
+def get_cached(url):
+    item = URL_CACHE.get(url)
+    if item and time.time() - item['time'] < CACHE_TTL:
+        return item['data']
+    return None
+
+def set_cached(url, data):
+    URL_CACHE[url] = {'data': data, 'time': time.time()}
+
+def get_ydl_options(platform='generic'):
+    opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'com.google.android.youtube/19.05.36 (Linux; U; Android 14; US) gzip',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
+        'socket_timeout': 6,
     }
+    # ইউটিউবের ক্ষেত্রে অ্যান্ড্রয়েড ক্লায়েন্ট ব্যবহার করা হয় যা বট চেক বাইপাস করে
+    if 'youtube' in platform or 'youtu.be' in platform:
+        opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+        opts['http_headers'] = {
+            'User-Agent': 'com.google.android.youtube/19.05.36 (Linux; U; Android 14; US) gzip'
+        }
+    return opts
 
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "status": "online",
-        "service": "VideoDrop Real Media Engine",
-        "ready": True
+        "service": "VideoDrop Ultra-Fast Multi-Platform Downloader",
+        "supported": ["YouTube", "Facebook", "Instagram", "TikTok"]
     })
 
 @app.route('/analyze', methods=['POST'])
@@ -38,13 +50,20 @@ def analyze():
     if not url:
         return jsonify({"error": "URL is required"}), 400
 
+    # ক্যাশ চেক
+    cached = get_cached(url)
+    if cached:
+        return jsonify(cached)
+
     try:
-        with yt_dlp.YoutubeDL(get_ydl_options()) as ydl:
+        ydl_opts = get_ydl_options(url)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
             formats = []
             seen_heights = set()
             
+            # ভিডিও ফরম্যাট ফিল্টারিং
             for f in info.get('formats', []):
                 height = f.get('height')
                 ext = f.get('ext', 'mp4')
@@ -57,14 +76,25 @@ def analyze():
                     
                     formats.append({
                         "id": f"{height}p",
-                        "quality": f"{height}p {'HD' if height >= 720 else 'SD'}",
+                        "quality": f"{height}p {'Full HD' if height >= 1080 else 'HD' if height >= 720 else 'SD'}",
                         "format": ext,
                         "size": size_str,
                         "downloadAvailable": True,
                         "downloadUrl": stream_url
                     })
             
-            # অডিও MP3 স্ট্রিম
+            # যদি সরাসরি হাইট না পাওয়া যায় (যেমন ফেসবুক/ইনস্টাগ্রাম/টিকটক)
+            if not formats:
+                formats.append({
+                    "id": "hd",
+                    "quality": "HD Quality (Source)",
+                    "format": "mp4",
+                    "size": "Original Stream",
+                    "downloadAvailable": True,
+                    "downloadUrl": info.get('url')
+                })
+            
+            # অডিও (MP3) অপশন
             audio_url = None
             for f in info.get('formats', []):
                 if f.get('acodec') != 'none' and f.get('vcodec') == 'none' and f.get('url'):
@@ -85,7 +115,7 @@ def analyze():
             secs = int(duration_sec % 60)
             duration_str = f"{mins:02d}:{secs:02d}" if duration_sec else None
 
-            return jsonify({
+            res_data = {
                 "success": True,
                 "title": info.get('title', 'Video'),
                 "thumbnail": info.get('thumbnail', ''),
@@ -96,7 +126,10 @@ def analyze():
                 },
                 "downloadConfigured": True,
                 "formats": formats
-            })
+            }
+            
+            set_cached(url, res_data)
+            return jsonify(res_data)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
@@ -110,7 +143,8 @@ def download():
         return jsonify({"error": "URL is required"}), 400
 
     try:
-        with yt_dlp.YoutubeDL(get_ydl_options()) as ydl:
+        ydl_opts = get_ydl_options(url)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
             chosen_url = None
@@ -120,11 +154,12 @@ def download():
                         chosen_url = f.get('url')
                         break
             else:
-                height_num = int(format_id.replace('p', '')) if format_id.replace('p', '').isdigit() else 720
-                for f in info.get('formats', []):
-                    if f.get('height') == height_num and f.get('url'):
-                        chosen_url = f.get('url')
-                        break
+                height_num = int(format_id.replace('p', '')) if format_id.replace('p', '').isdigit() else None
+                if height_num:
+                    for f in info.get('formats', []):
+                        if f.get('height') == height_num and f.get('url'):
+                            chosen_url = f.get('url')
+                            break
             
             if not chosen_url:
                 for f in reversed(info.get('formats', [])):
