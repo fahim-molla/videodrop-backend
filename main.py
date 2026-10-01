@@ -4,18 +4,26 @@ import yt_dlp
 import os
 
 app = Flask(__name__)
-# যেকোনো জায়গা থেকে রিকোয়েস্ট আসার অনুমতি (CORS)
 CORS(app)
 
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({
-        "status": "online",
-        "message": "VideoDrop Backend Microservice is running perfectly!"
-    })
+def find_cookie_file():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # কমন কুকিজ নাম চেক করা
+    for fname in ['cookies.txt', 'cookie.txt', 'youtube_cookies.txt']:
+        p = os.path.join(base_dir, fname)
+        if os.path.exists(p):
+            return p
+    # ডিরেক্টরিতে requirements.txt ছাড়া অন্য কোনো .txt ফাইল থাকলে সেটি নেওয়া
+    try:
+        for f in os.listdir(base_dir):
+            if f.endswith('.txt') and f != 'requirements.txt':
+                return os.path.join(base_dir, f)
+    except Exception:
+        pass
+    return None
 
 def get_ydl_options():
-    cookie_path = 'cookies.txt' if os.path.exists('cookies.txt') else None
+    cookie_file = find_cookie_file()
     opts = {
         'quiet': True,
         'no_warnings': True,
@@ -25,16 +33,30 @@ def get_ydl_options():
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
-    # যদি cookies.txt ফাইল থাকে তবে তা ব্যবহার করবে
-    if cookie_path:
-        opts['cookiefile'] = cookie_path
-    else:
-        opts['extractor_args'] = {
-            'youtube': {
-                'player_client': ['tv_embedded', 'android', 'ios']
-            }
-        }
+    if cookie_file:
+        opts['cookiefile'] = cookie_file
     return opts
+
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({
+        "status": "online",
+        "message": "VideoDrop Backend Microservice is running perfectly!",
+        "cookies_detected": bool(find_cookie_file())
+    })
+
+@app.route('/debug', methods=['GET'])
+def debug():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        files = os.listdir(base_dir)
+    except Exception as e:
+        files = [str(e)]
+    cookie_file = find_cookie_file()
+    return jsonify({
+        "files_in_app": files,
+        "cookie_file_found": cookie_file
+    })
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -50,7 +72,6 @@ def analyze():
             formats = []
             seen_heights = set()
             
-            # ভিডিও কোয়ালিটি ফিল্টার করা (1080p, 720p, 480p, 360p)
             for f in info.get('formats', []):
                 height = f.get('height')
                 ext = f.get('ext', 'mp4')
@@ -70,7 +91,6 @@ def analyze():
                         "downloadUrl": stream_url
                     })
             
-            # অডিও অপশন (MP3 / Audio)
             formats.append({
                 "id": "audio",
                 "quality": "Audio Only",
@@ -80,7 +100,6 @@ def analyze():
                 "downloadUrl": info.get('url') or url
             })
 
-            # ভিডিওর মোট সময় ফরম্যাট করা (MM:SS)
             duration_sec = info.get('duration', 0)
             mins = int(duration_sec // 60)
             secs = int(duration_sec % 60)
