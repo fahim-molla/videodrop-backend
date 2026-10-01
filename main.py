@@ -14,6 +14,28 @@ def home():
         "message": "VideoDrop Backend Microservice is running perfectly!"
     })
 
+def get_ydl_options():
+    cookie_path = 'cookies.txt' if os.path.exists('cookies.txt') else None
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+    }
+    # যদি cookies.txt ফাইল থাকে তবে তা ব্যবহার করবে
+    if cookie_path:
+        opts['cookiefile'] = cookie_path
+    else:
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['tv_embedded', 'android', 'ios']
+            }
+        }
+    return opts
+
 @app.route('/analyze', methods=['POST'])
 def analyze():
     data = request.get_json() or {}
@@ -21,24 +43,8 @@ def analyze():
     if not url:
         return jsonify({"error": "URL is required"}), 400
 
-    # YouTube এবং অন্যান্য সাইটের বট-ব্লক বাইপাস করার কনফিগারেশন
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'skip_download': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-    }
-
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(get_ydl_options()) as ydl:
             info = ydl.extract_info(url, download=False)
             
             formats = []
@@ -101,18 +107,8 @@ def download():
     url = data.get('url')
     format_id = data.get('formatId', '')
     
-    ydl_opts = {
-        'quiet': True,
-        'skip_download': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios']
-            }
-        }
-    }
-    
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(get_ydl_options()) as ydl:
             info = ydl.extract_info(url, download=False)
             
             for f in info.get('formats', []):
